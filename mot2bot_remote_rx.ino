@@ -13,8 +13,8 @@
 #define MASSAGE_PARSER_BUFFERSIZE 48
 #define MASSAGE_PACKER_BUFFERSIZE 48
 
-#include <SlipMassagePacker.h>
 #include <SlipMassageParser.h>
+//#include <SlipMassagePacker.h>
 
 
 #define LED_PIN 9
@@ -32,17 +32,26 @@ struct RemoteData {
 
 struct RobotData {
   long magic = 6435437;
+  uint8_t cmd = 0;
   float bat_percent;
   float bat_voltage;
   int8_t rssi;
   char ee = 0xc0;
 };
 
+struct RobotSound {
+  long magic = 6435437;
+  uint8_t cmd = 1;
+  uint8_t id;
+  char name [16];
+};
+
 RemoteData state;
 RobotData rdata;
+RobotSound rsound;
 
 SlipMassageParser inbound;
-SlipMassagePacker outbound;
+//SlipMassagePacker outbound;
 
 MilliTimer sendTimer;
 
@@ -54,11 +63,13 @@ void setup() {
   delay(100);
   rdata.bat_percent = -1.0;
   rdata.bat_voltage = -1.0;
+  Serial.println("");
+  Serial.println("m2b ready.");
 }
 
 short needToSend = 0;
 
-void loop() {
+void tryRecv() {
   if (rf12_recvDone() && rf12_crc == 0) {
     memcpy(&state, (void*)rf12_data, sizeof(RemoteData));
     /*
@@ -80,11 +91,15 @@ void loop() {
       Serial.print(state.mode);
       Serial.println();
     } else {
-      Serial.print("Wrong magic: ");
+      Serial.print("wrong magic: ");
       Serial.println(state.magic);
     }
     //needToSend = 1;
   }
+}
+
+void loop() {
+  tryRecv();
 
   if (sendTimer.poll(1000)) {
     needToSend = 1;
@@ -104,7 +119,31 @@ void loop() {
     while(Serial.available()) {
       if(inbound.parse( Serial.read() )) {
         //Serial.print("parseStream: ");
-        if ( inbound.fullMatch("status") ) {
+        if(inbound.fullMatch("m2bsnd") ) {
+          rsound.id = inbound.nextByte();
+          int8_t leng = inbound.nextByte();
+          Serial.print("id=");
+          Serial.print(rsound.id);
+          Serial.print(" leng=");
+          Serial.print(leng);
+
+          inbound.nextBlock(rsound.name, min(leng, 16));
+          Serial.print(" name='");
+          Serial.print(rsound.name);
+          Serial.println("'");
+          while(!rf12_canSend()) {
+            tryRecv();
+            delay(10);
+          }
+          activityLed(1);
+          byte header = RF12_HDR_DST | (NODE_ID+1);
+          rsound.magic = 6435437;
+          rsound.cmd = 1;
+          rf12_sendStart(header, &rsound, sizeof(RobotSound));
+          rf12_sendWait(0);
+          activityLed(0);
+        }
+        if(inbound.fullMatch("status") ) {
           /*
           byte byteValue = inbound.nextByte();
           int intValue = inbound.nextInt();
@@ -131,6 +170,7 @@ void loop() {
       //Serial.println(".");
     }
   }
+  //Serial.print(".");
 }
 
 static void activityLed (byte on) {
